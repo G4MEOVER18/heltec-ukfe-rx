@@ -106,9 +106,9 @@ void setup() {
     // FSK exakt auf die ukfe_rf-Konstanten: 868.35 MHz, 9.6 kbps, 25 kHz Dev.
     int st = radio.beginFSK(
         UKFE_RF_FREQUENCY_HZ / 1e6f,   // MHz
-        UKFE_RF_BITRATE / 1000.0f,     // kbps
-        UKFE_RF_DEVIATION_HZ / 1000.0f,// kHz
-        58.6f,                         // RX-Bandbreite kHz
+        UKFE_RF_BITRATE / 1000.0f,     // kbps (9.6)
+        47.6f,                         // kHz Dev — MUSS zum Flipper-Preset 2FSKDev476 passen
+        117.3f,                        // RX-Bandbreite kHz (deckt 2*(Dev+br/2))
         10,                            // TX-Power (fuer spaetere Antworten)
         16);                           // Praeambel-Bits
     radio.setTCXO(1.8);                // Heltec V3: TCXO 1.8 V
