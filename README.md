@@ -40,3 +40,10 @@ Trigger · PayloadRun · WifiDeauth · EvilPortal · BeaconSpam — v1 quittiert
 - Paket-Format-Alignment SX1262 ↔ CC1101 (fixed length, Sync, Präambel) am lebenden Link feintunen.
 - Flipper-Seite 2-FSK-Preset (custom CC1101-Register).
 - Secret aus einer geteilten Config statt Hardcode.
+
+## USB-HID (Penetrator)
+Bei `TRIGGER`/`PAYLOAD` tippt der ESP32-S3 eine HID-Payload ueber **natives USB**.
+- Build-Flags: `ARDUINO_USB_MODE=0` (OTG/TinyUSB) + `ARDUINO_USB_CDC_ON_BOOT=0` (Serial->UART0).
+- **Verdrahtung:** Die USB-C-Buchse des Heltec haengt am CP210x (COM26, nur Flash/Serial). Fuer HID die **nativen USB-Pins des S3 (GPIO19=D-, GPIO20=D+)** an den Ziel-USB fuehren.
+- Payloads in `hid_payload()` (idx aus dem Funkbefehl). Default: benigne Demos (Marker / Win+R->notepad). Eigene autorisierte Payloads dort ergaenzen.
+- **Rahmen:** nur eigene Geraete / autorisierte Tests.

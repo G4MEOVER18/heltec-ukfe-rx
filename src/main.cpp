@@ -5,10 +5,16 @@
 #include <RadioLib.h>
 #include <U8g2lib.h>
 #include <SPI.h>
+#include "USB.h"
+#include "USBHIDKeyboard.h"
 
 extern "C" {
 #include "ukfe_rf.h"
 }
+
+// Natives USB (ESP32-S3, GPIO19/20) als HID-Tastatur -> BadUSB auf Zielrechner.
+// Nur autorisierte Tests/eigene Geraete. Zielrechner an das native USB (nicht COM26/CP210x).
+USBHIDKeyboard Keyboard;
 
 // ---- Heltec WiFi LoRa 32 V3 Pinbelegung ----
 #define PIN_LORA_NSS   8
@@ -56,20 +62,48 @@ void oledMsg(const char* l1, const char* l2 = "", const char* l3 = "") {
     oled.sendBuffer();
 }
 
+// HID-Payloads (DuckyScript-artig). Nur autorisierte Tests. idx aus dem Funkbefehl.
+// Standardmaessig benigne Demos — eigene Payloads hier ergaenzen.
+static void hid_payload(uint8_t idx) {
+    delay(300);  // Host-Enumeration abwarten
+    switch(idx) {
+    case 0:  // Marker-Test: beweist, dass HID tippt
+        Keyboard.println("G4MEOVER-HID online");
+        break;
+    case 1:  // Win+R -> Ausfuehren-Dialog oeffnen (Demo einer echten Aktion)
+        Keyboard.press(KEY_LEFT_GUI);
+        Keyboard.press('r');
+        delay(100);
+        Keyboard.releaseAll();
+        delay(400);
+        Keyboard.println("notepad");   // harmloses Ziel
+        break;
+    default:
+        Keyboard.print("payload ");
+        Keyboard.println(idx);
+        break;
+    }
+}
+
 void act(const UkfeRfMessage* m) {
     char buf[24];
     // LED-Quittung
     digitalWrite(PIN_LED, HIGH); delay(60); digitalWrite(PIN_LED, LOW);
     switch(m->cmd) {
-    case UkfeRfCmdTrigger:
-        snprintf(buf, sizeof(buf), "id=%u", m->arg_len ? m->args[0] : 0);
-        oledMsg("CMD: TRIGGER", buf);
-        // TODO(HW): GPIO/USB-HID-Payload ausloesen
+    case UkfeRfCmdTrigger: {
+        uint8_t id = m->arg_len ? m->args[0] : 0;
+        snprintf(buf, sizeof(buf), "id=%u -> HID", id);
+        oledMsg("CMD: TRIGGER", buf, "tippe Payload...");
+        hid_payload(id);
         break;
-    case UkfeRfCmdPayloadRun:
-        snprintf(buf, sizeof(buf), "idx=%u", m->arg_len ? m->args[0] : 0);
-        oledMsg("CMD: PAYLOAD", buf);
+    }
+    case UkfeRfCmdPayloadRun: {
+        uint8_t idx = m->arg_len ? m->args[0] : 0;
+        snprintf(buf, sizeof(buf), "idx=%u -> HID", idx);
+        oledMsg("CMD: PAYLOAD", buf, "tippe Payload...");
+        hid_payload(idx);
         break;
+    }
     case UkfeRfCmdWifiDeauth:
         oledMsg("CMD: WIFI DEAUTH");
         // TODO(HW): an ESP32-WiFi-Satellit weiterreichen
@@ -94,6 +128,8 @@ void startRx() {
 
 void setup() {
     Serial.begin(115200);
+    Keyboard.begin();   // natives USB-HID-Keyboard
+    USB.begin();
     pinMode(PIN_LED, OUTPUT);
     pinMode(PIN_VEXT, OUTPUT);
     digitalWrite(PIN_VEXT, LOW);  // OLED-Versorgung an
