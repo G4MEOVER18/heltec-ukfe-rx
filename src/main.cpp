@@ -62,27 +62,38 @@ void oledMsg(const char* l1, const char* l2 = "", const char* l3 = "") {
     oled.sendBuffer();
 }
 
-// HID-Payloads (DuckyScript-artig). Nur autorisierte Tests. idx aus dem Funkbefehl.
-// Standardmaessig benigne Demos — eigene Payloads hier ergaenzen.
-static void hid_payload(uint8_t idx) {
+// ---- HID-Payload-Bibliothek (benannt, erweiterbar). Nur autorisierte Tests. ----
+static void win_r(const char* cmd) {  // Ausfuehren-Dialog + Kommando
+    Keyboard.press(KEY_LEFT_GUI);
+    Keyboard.press('r');
+    delay(120);
+    Keyboard.releaseAll();
+    delay(400);
+    Keyboard.println(cmd);
+}
+static void pl_marker()      { Keyboard.println("G4MEOVER-HID online"); }
+static void pl_notepad()     { win_r("notepad"); }
+static void pl_powershell()  { win_r("powershell"); }
+static void pl_cmd_marker()  { win_r("cmd /k echo G4MEOVER pentest marker"); }
+static void pl_lock()        { Keyboard.press(KEY_LEFT_GUI); Keyboard.press('l');
+                               delay(80); Keyboard.releaseAll(); }
+
+typedef struct { const char* name; void (*run)(); } HidPayload;
+static const HidPayload PAYLOADS[] = {
+    {"Marker",     pl_marker},
+    {"Notepad",    pl_notepad},
+    {"PowerShell", pl_powershell},
+    {"CMD Marker", pl_cmd_marker},
+    {"Lock",       pl_lock},
+};
+#define PAYLOAD_COUNT (sizeof(PAYLOADS) / sizeof(PAYLOADS[0]))
+
+// Fuehrt Payload idx aus, liefert den Namen (fuer OLED) zurueck.
+static const char* hid_payload(uint8_t idx) {
     delay(300);  // Host-Enumeration abwarten
-    switch(idx) {
-    case 0:  // Marker-Test: beweist, dass HID tippt
-        Keyboard.println("G4MEOVER-HID online");
-        break;
-    case 1:  // Win+R -> Ausfuehren-Dialog oeffnen (Demo einer echten Aktion)
-        Keyboard.press(KEY_LEFT_GUI);
-        Keyboard.press('r');
-        delay(100);
-        Keyboard.releaseAll();
-        delay(400);
-        Keyboard.println("notepad");   // harmloses Ziel
-        break;
-    default:
-        Keyboard.print("payload ");
-        Keyboard.println(idx);
-        break;
-    }
+    if(idx >= PAYLOAD_COUNT) return "?";
+    PAYLOADS[idx].run();
+    return PAYLOADS[idx].name;
 }
 
 void act(const UkfeRfMessage* m) {
@@ -92,16 +103,16 @@ void act(const UkfeRfMessage* m) {
     switch(m->cmd) {
     case UkfeRfCmdTrigger: {
         uint8_t id = m->arg_len ? m->args[0] : 0;
-        snprintf(buf, sizeof(buf), "id=%u -> HID", id);
-        oledMsg("CMD: TRIGGER", buf, "tippe Payload...");
-        hid_payload(id);
+        const char* pn = hid_payload(id);
+        snprintf(buf, sizeof(buf), "id=%u: %s", id, pn);
+        oledMsg("CMD: TRIGGER", buf, "-> HID getippt");
         break;
     }
     case UkfeRfCmdPayloadRun: {
         uint8_t idx = m->arg_len ? m->args[0] : 0;
-        snprintf(buf, sizeof(buf), "idx=%u -> HID", idx);
-        oledMsg("CMD: PAYLOAD", buf, "tippe Payload...");
-        hid_payload(idx);
+        const char* pn = hid_payload(idx);
+        snprintf(buf, sizeof(buf), "idx=%u: %s", idx, pn);
+        oledMsg("CMD: PAYLOAD", buf, "-> HID getippt");
         break;
     }
     case UkfeRfCmdWifiDeauth:
