@@ -127,6 +127,7 @@ void setup() {
 
     radio.setDio1Action(onDio1);
     startRx();
+    Serial.println("\nG4MEOVER UKFE-RX bereit (868.35 MHz 2FSK). Warte auf Frames...");
     oledMsg("Bereit.", "868.35 MHz 2FSK", "warte auf Frame");
 }
 
@@ -138,13 +139,29 @@ void loop() {
     int len = radio.readData(frame, UKFE_RF_MAX_FRAME);
     rxCount++;
 
+    // --- Diagnose: rohe Bytes + RSSI ueber Serial ---
+    Serial.printf("RX len=%d rssi=%.1f : ", len, radio.getRSSI());
+    for(int i = 0; i < UKFE_RF_MAX_FRAME; i++) Serial.printf("%02X ", frame[i]);
+    Serial.println();
+
     if(len == RADIOLIB_ERR_NONE) {
         UkfeRfMessage msg;
-        if(ukfe_rf_parse_frame(UKFE_SECRET, frame, UKFE_RF_MAX_FRAME, &msg, &lastCounter)) {
+        // Echte Framelaenge steht in frame[0] (LEN); der Rest ist Padding.
+        size_t real_len = (size_t)frame[0] + 1;
+        if(real_len > UKFE_RF_MAX_FRAME) real_len = UKFE_RF_MAX_FRAME;
+        if(ukfe_rf_parse_frame(UKFE_SECRET, frame, real_len, &msg, &lastCounter)) {
             okCount++;
+            Serial.printf("PARSE OK cmd=0x%02X counter=%lu\n", msg.cmd, (unsigned long)msg.counter);
             act(&msg);
         } else {
-            oledMsg("Frame verworfen", "(MAC/CRC/Replay)");
+            Serial.println("PARSE FAIL (MAC/CRC/Counter)");
+            // Diagnose direkt aufs OLED: erste 8 empfangene Bytes (erwartet: [LEN][47][01]...)
+            char h1[24], h2[24];
+            snprintf(h1, sizeof(h1), "%02X %02X %02X %02X",
+                     frame[0], frame[1], frame[2], frame[3]);
+            snprintf(h2, sizeof(h2), "%02X %02X %02X %02X",
+                     frame[4], frame[5], frame[6], frame[7]);
+            oledMsg(h1, h2, "erwartet: LL 47 01");
         }
     }
     startRx();  // wieder in Empfang gehen
