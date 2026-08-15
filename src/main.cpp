@@ -5,8 +5,14 @@
 #include <RadioLib.h>
 #include <U8g2lib.h>
 #include <SPI.h>
+#include <WiFi.h>
+#include <esp_now.h>
+#include <esp_wifi.h>
 #include "USB.h"
 #include "USBHIDKeyboard.h"
+
+// ESP-NOW-Kanal — MUSS mit dem WROOM-Relay (g4meover-wifi-relay) uebereinstimmen.
+#define ESPNOW_CHANNEL 1
 
 extern "C" {
 #include "ukfe_rf.h"
@@ -30,6 +36,8 @@ USBHIDKeyboard Keyboard;
 #define PIN_VEXT       36  // LOW = OLED-Versorgung an
 #define PIN_LED        35
 
+static const uint8_t BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
 // Gemeinsames Geheimnis fuer den keyed MAC — IDENTISCH mit RF_SECRET in
 // lora-ukfe/rf/rf_comm.c (out-of-band pairen, Pairing-Bytes ersetzen!).
 static const uint8_t UKFE_SECRET[UKFE_RF_SECRET_LEN] = {
@@ -42,11 +50,48 @@ SX1262 radio = new Module(PIN_LORA_NSS, PIN_LORA_DIO1, PIN_LORA_RST, PIN_LORA_BU
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, PIN_OLED_RST, PIN_OLED_SCL, PIN_OLED_SDA);
 
 static volatile bool rxFlag = false;
-static uint32_t lastCounter = 0;     // Anti-Replay-Fenster
+static uint32_t lastCounter = 0;     // Anti-Replay-Fenster (868-Funk)
 static uint32_t rxCount = 0, okCount = 0;
+
+// ---- ESP-NOW-Transport (WiFi 2.4G, vom WROOM-Relay) — additiv neben 868 ----
+static volatile bool enowFlag = false;
+static uint8_t  enowBuf[UKFE_RF_MAX_FRAME];
+static volatile int enowLen = 0;
+static uint32_t enowCounter = 0;     // SEPARATES Anti-Replay-Fenster (WiFi)
+static uint32_t enowRx = 0, enowOk = 0;
+static uint8_t  enowSenderMac[6] = {0};   // MAC des WROOM-Relays (fuer ACK-Rueckweg)
+static uint32_t respCounter = 0;          // eigener Counter fuer Antwort-Frames
 
 ICACHE_RAM_ATTR void onDio1() {
     rxFlag = true;
+}
+
+// ESP-NOW-Empfang: nur Bytes puffern + Flag setzen (schnell, kein HID/Delay hier).
+void onEspNowRecv(const uint8_t* mac, const uint8_t* data, int len) {
+    if(enowFlag) return;             // vorheriger Frame noch nicht verarbeitet
+    if(len <= 0 || len > (int)UKFE_RF_MAX_FRAME) return;
+    memcpy(enowSenderMac, mac, 6);   // Absender fuer den ACK merken
+    memcpy(enowBuf, data, len);
+    enowLen = len;
+    enowFlag = true;
+}
+
+// Signierten ACK per ESP-NOW an den Absender (WROOM) zurueck -> Deck sieht das Ergebnis.
+void send_espnow_ack(const uint8_t* mac, uint8_t orig_cmd, uint8_t result) {
+    UkfeRfMessage m;
+    m.cmd = UkfeRfRespAck; m.arg_len = 2;
+    m.args[0] = orig_cmd; m.args[1] = result;
+    m.counter = ++respCounter;
+    uint8_t frame[UKFE_RF_MAX_FRAME];
+    size_t n = ukfe_rf_build_frame(UKFE_SECRET, &m, frame, sizeof(frame));
+    if(!n) return;
+    if(!esp_now_is_peer_exist(mac)) {
+        esp_now_peer_info_t p = {};
+        memcpy(p.peer_addr, mac, 6);
+        p.channel = ESPNOW_CHANNEL; p.encrypt = false;
+        esp_now_add_peer(&p);
+    }
+    esp_now_send(mac, frame, n);
 }
 
 void oledMsg(const char* l1, const char* l2 = "", const char* l3 = "") {
@@ -56,8 +101,9 @@ void oledMsg(const char* l1, const char* l2 = "", const char* l3 = "") {
     oled.drawStr(0, 26, l1);
     oled.drawStr(0, 40, l2);
     oled.drawStr(0, 54, l3);
-    char st[24];
-    snprintf(st, sizeof(st), "rx:%lu ok:%lu", (unsigned long)rxCount, (unsigned long)okCount);
+    char st[28];
+    snprintf(st, sizeof(st), "rx:%lu ok:%lu en:%lu",
+             (unsigned long)rxCount, (unsigned long)okCount, (unsigned long)enowOk);
     oled.drawStr(0, 64, st);
     oled.sendBuffer();
 }
@@ -174,11 +220,50 @@ void setup() {
 
     radio.setDio1Action(onDio1);
     startRx();
-    Serial.println("\nG4MEOVER UKFE-RX bereit (868.35 MHz 2FSK). Warte auf Frames...");
-    oledMsg("Bereit.", "868.35 MHz 2FSK", "warte auf Frame");
+
+    // ---- ESP-NOW-Empfang initialisieren (WiFi 2.4G, parallel zum 868-RX) ----
+    // SX1262 (externes SPI) und WiFi (interner 2.4G-Radio) koexistieren konfliktfrei.
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+    esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+    bool enow_ok = (esp_now_init() == ESP_OK);
+    if(enow_ok) {
+        esp_now_register_recv_cb(onEspNowRecv);
+        // Broadcast-Peer, damit der Hub 868-Frames an ALLE Satelliten weiterfunken kann.
+        esp_now_peer_info_t bpeer = {};
+        memcpy(bpeer.peer_addr, BROADCAST_MAC, 6);
+        bpeer.channel = ESPNOW_CHANNEL; bpeer.encrypt = false;
+        esp_now_add_peer(&bpeer);
+    } else Serial.println("ESP-NOW init FEHLGESCHLAGEN (868-RX laeuft weiter)");
+
+    Serial.printf("\nG4MEOVER UKFE-RX bereit. 868.35MHz-2FSK + ESP-NOW(Kanal %d, %s).\n",
+                  ESPNOW_CHANNEL, enow_ok ? "an" : "AUS");
+    Serial.printf("STA-MAC %s\n", WiFi.macAddress().c_str());
+    oledMsg("Bereit.", "868 2FSK + ESPNOW", "warte auf Frame");
 }
 
 void loop() {
+    // --- ESP-NOW-Frame (WiFi vom WROOM-Relay) zuerst verarbeiten ---
+    if(enowFlag) {
+        int len = enowLen;
+        uint8_t frame[UKFE_RF_MAX_FRAME];
+        memcpy(frame, enowBuf, len);
+        enowFlag = false;            // Puffer wieder freigeben
+        enowRx++;
+        size_t real_len = (size_t)frame[0] + 1;
+        if(real_len > (size_t)len) real_len = len;
+        UkfeRfMessage msg;
+        if(ukfe_rf_parse_frame(UKFE_SECRET, frame, real_len, &msg, &enowCounter)) {
+            enowOk++;
+            Serial.printf("ESPNOW OK cmd=0x%02X counter=%lu\n",
+                          msg.cmd, (unsigned long)msg.counter);
+            act(&msg);
+            send_espnow_ack(enowSenderMac, msg.cmd, 0);   // ACK an den WROOM/Deck zurueck
+        } else {
+            Serial.println("ESPNOW PARSE FAIL (MAC/CRC/Counter)");
+        }
+    }
+
     if(!rxFlag) return;
     rxFlag = false;
 
@@ -200,6 +285,10 @@ void loop() {
             okCount++;
             Serial.printf("PARSE OK cmd=0x%02X counter=%lu\n", msg.cmd, (unsigned long)msg.counter);
             act(&msg);
+            // HUB: den vom Flipper per 868 empfangenen Frame per ESP-NOW an ALLE
+            // Satelliten weiterfunken (LilyGo/WROOM/S3). Der Heltec = 868->ESP-NOW-Bridge.
+            esp_err_t br = esp_now_send(BROADCAST_MAC, frame, real_len);
+            Serial.printf("HUB -> ESP-NOW broadcast %s\n", br == ESP_OK ? "OK" : "FAIL");
         } else {
             Serial.println("PARSE FAIL (MAC/CRC/Counter)");
             // Diagnose direkt aufs OLED: erste 8 empfangene Bytes (erwartet: [LEN][47][01]...)
