@@ -23,11 +23,31 @@ typedef enum {
     UkfeRfCmdPayloadList = 0x04,
     UkfeRfCmdPayloadRun  = 0x05,  // args: uint8 idx
     UkfeRfCmdLoraScan    = 0x10,  // args: uint32 start_khz, uint32 end_khz, uint16 dwell_ms
+    UkfeRfCmdLoraTx      = 0x11,  // freies LoRa-Senden
+    UkfeRfCmdSubghzScan  = 0x12,
+    UkfeRfCmdSubghzReplay= 0x13,
+    UkfeRfCmdJammer      = 0x14,  // args: uint8 band
+    UkfeRfCmdRollForge   = 0x15,
+    UkfeRfCmdProtoPirate = 0x16,
     UkfeRfCmdWifiScan    = 0x20,
-    UkfeRfCmdWifiDeauth  = 0x21,  // args: uint8 bssid[6], uint8 channel
+    UkfeRfCmdWifiDeauth  = 0x21,  // args: uint8 bssid[6], uint8 channel (0=alle)
     UkfeRfCmdWifiStop    = 0x22,
     UkfeRfCmdEvilPortal  = 0x23,  // args: uint8 portal_id
     UkfeRfCmdBeaconSpam  = 0x24,  // args: uint8 mode
+    UkfeRfCmdHandshake   = 0x25,  // WPA-Handshake-Capture
+    UkfeRfCmdWardrive    = 0x26,  // WiFi + GPS -> WiGLE
+    UkfeRfCmdProbeSniff  = 0x27,
+    UkfeRfCmdKarma       = 0x28,
+    UkfeRfCmdPacketMon   = 0x29,  // Packet Monitor / PCAP
+    UkfeRfCmdPwnagotchi  = 0x2A,
+    UkfeRfCmdBleScan     = 0x30,
+    UkfeRfCmdBleSpam     = 0x31,  // args: uint8 mode (Apple/Android/Samsung/Windows)
+    UkfeRfCmdSourApple   = 0x32,
+    UkfeRfCmdBleSniff    = 0x33,
+    UkfeRfCmdGpsStatus   = 0x40,
+    UkfeRfCmdGpsWardrive = 0x41,
+    UkfeRfCmdHidPayload  = 0x50,  // args: uint8 idx (Marker/Notepad/PS/CMD/Lock)
+    UkfeRfCmdHidDucky    = 0x51,  // args: uint8 script_id
 } UkfeRfCmd;
 
 // ---- Responses (Heltec -> Flipper), Bit7 gesetzt ----
