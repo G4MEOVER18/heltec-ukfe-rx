@@ -19,6 +19,7 @@ extern "C" {
 }
 #include "wifi_attack.h"   // native WiFi-Angriffe (Deauth/Beacon/Scan), nicht-blockierend
 #include "evil_portal.h"   // Captive Portal (SoftAP + DNS + Login-Harvest)
+#include "wifi_recon.h"    // Promiscuous-Recon (Handshake/Probe/PacketMon/Pwnagotchi/Wardrive)
 
 // Natives USB (ESP32-S3, GPIO19/20) als HID-Tastatur -> BadUSB auf Zielrechner.
 // Nur autorisierte Tests/eigene Geraete. Zielrechner an das native USB (nicht COM26/CP210x).
@@ -186,6 +187,7 @@ void act(const UkfeRfMessage* m) {
     case UkfeRfCmdWifiStop:
         wifi_attack_stop();
         evil_portal_stop();                       // beendet auch ein laufendes Portal
+        wifi_recon_stop();                        // beendet auch laufenden Recon-Sniffer
         oledMsg("CMD: WIFI STOP", "Angriff beendet");
         break;
     case UkfeRfCmdBeaconSpam: {
@@ -201,6 +203,41 @@ void act(const UkfeRfMessage* m) {
         oledMsg("CMD: EVIL PORTAL", buf, "868=stop, Logins@Serial");
         break;
     }
+    case UkfeRfCmdHandshake: {
+        // args: uint8 bssid[6], uint8 channel — EAPOL sniffen + Deauth-Stoesse
+        if(m->arg_len >= 7) {
+            wifi_recon_handshake(m->args, m->args[6], 0);
+            snprintf(buf, sizeof(buf), "ch=%u %02X:%02X:%02X..", m->args[6],
+                     m->args[0], m->args[1], m->args[2]);
+            oledMsg("CMD: HANDSHAKE", buf, "868=stop, EAPOL@Serial");
+        } else {
+            oledMsg("CMD: HANDSHAKE", "arg fehlt (bssid+ch)");
+        }
+        break;
+    }
+    case UkfeRfCmdWardrive: {
+        oledMsg("CMD: WARDRIVE", "scanne...");
+        uint8_t n = wifi_recon_wardrive();        // Scan -> WiGLE-CSV ueber Serial
+        snprintf(buf, sizeof(buf), "%u APs", n);
+        oledMsg("CMD: WARDRIVE", buf, "WiGLE-CSV@Serial");
+        break;
+    }
+    case UkfeRfCmdProbeSniff:
+        wifi_recon_probe(0);
+        oledMsg("CMD: PROBE SNIFF", "laeuft (868=stop)", "SSID/MAC@Serial");
+        break;
+    case UkfeRfCmdPacketMon:
+        wifi_recon_packetmon(0);
+        oledMsg("CMD: PACKET MON", "laeuft (868=stop)", "Stats@Serial");
+        break;
+    case UkfeRfCmdPwnagotchi:
+        wifi_recon_pwnagotchi(0);
+        oledMsg("CMD: PWNAGOTCHI", "Detektor laeuft", "868=stop");
+        break;
+    case UkfeRfCmdKarma:
+        // TODO: Probe sniffen + passende Fake-APs beacon-en (Probe->Response-Loop)
+        oledMsg("CMD: KARMA", "noch nicht impl.");
+        break;
     default:
         snprintf(buf, sizeof(buf), "0x%02X alen=%u", m->cmd, m->arg_len);
         oledMsg("CMD:", buf);
@@ -266,8 +303,9 @@ void setup() {
         esp_now_add_peer(&bpeer);
     } else Serial.println("ESP-NOW init FEHLGESCHLAGEN (868-RX laeuft weiter)");
 
-    // WiFi-Angriffsmodul kennt den ESP-NOW-Kanal, um ihn nach Angriffen wiederherzustellen.
+    // WiFi-Module kennen den ESP-NOW-Kanal, um ihn nach Angriffen/Recon wiederherzustellen.
     wifi_attack_init(ESPNOW_CHANNEL);
+    wifi_recon_init(ESPNOW_CHANNEL);
 
     Serial.printf("\nG4MEOVER UKFE-RX bereit. 868.35MHz-2FSK + ESP-NOW(Kanal %d, %s).\n",
                   ESPNOW_CHANNEL, enow_ok ? "an" : "AUS");
@@ -279,6 +317,7 @@ void loop() {
     // Laufenden WiFi-Angriff bedienen (nicht-blockierend, ein Burst pro Iteration).
     wifi_attack_tick();
     evil_portal_tick();   // falls Portal aktiv: DNS + HTTP bedienen
+    wifi_recon_tick();    // falls Recon aktiv: Kanal-Hop / Deauth-Stoss / Statistik
 
     // --- ESP-NOW-Frame (WiFi vom WROOM-Relay) zuerst verarbeiten ---
     if(enowFlag) {
