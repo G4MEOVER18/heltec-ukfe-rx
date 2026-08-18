@@ -20,6 +20,7 @@ extern "C" {
 #include "wifi_attack.h"   // native WiFi-Angriffe (Deauth/Beacon/Scan), nicht-blockierend
 #include "evil_portal.h"   // Captive Portal (SoftAP + DNS + Login-Harvest)
 #include "wifi_recon.h"    // Promiscuous-Recon (Handshake/Probe/PacketMon/Pwnagotchi/Wardrive)
+#include "ble_spam.h"      // BLE-Spam (Apple/Windows/Android) + BLE-Scan via NimBLE
 
 // Natives USB (ESP32-S3, GPIO19/20) als HID-Tastatur -> BadUSB auf Zielrechner.
 // Nur autorisierte Tests/eigene Geraete. Zielrechner an das native USB (nicht COM26/CP210x).
@@ -238,6 +239,30 @@ void act(const UkfeRfMessage* m) {
         // TODO: Probe sniffen + passende Fake-APs beacon-en (Probe->Response-Loop)
         oledMsg("CMD: KARMA", "noch nicht impl.");
         break;
+    case UkfeRfCmdBleScan: {
+        uint8_t n = ble_scan(m->arg_len ? (uint32_t)m->args[0] * 1000 : 3000);
+        snprintf(buf, sizeof(buf), "%u BLE-Geraete", n);
+        oledMsg("CMD: BLE SCAN", buf, "-> siehe Serial");
+        break;
+    }
+    case UkfeRfCmdBleSpam: {
+        uint8_t mode = m->arg_len ? m->args[0] : 0;
+        ble_spam_start(mode);
+        oledMsg("CMD: BLE SPAM", "laeuft", "Abort(0x03)=stop");
+        break;
+    }
+    case UkfeRfCmdSourApple:
+        ble_spam_start(1);   // Apple-only Proximity-Spam
+        oledMsg("CMD: SOUR APPLE", "Apple-Spam", "Abort(0x03)=stop");
+        break;
+    case UkfeRfCmdBleSniff:
+        // TODO: passiver BLE-Sniffer/Logger (NimBLEScan-Callback dauerhaft)
+        oledMsg("CMD: BLE SNIFF", "noch nicht impl.");
+        break;
+    case UkfeRfCmdAbort:
+        ble_spam_stop();
+        oledMsg("CMD: ABORT", "BLE-Spam gestoppt");
+        break;
     default:
         snprintf(buf, sizeof(buf), "0x%02X alen=%u", m->cmd, m->arg_len);
         oledMsg("CMD:", buf);
@@ -314,10 +339,11 @@ void setup() {
 }
 
 void loop() {
-    // Laufenden WiFi-Angriff bedienen (nicht-blockierend, ein Burst pro Iteration).
+    // Laufende WiFi-/BLE-Aktionen bedienen (nicht-blockierend, pro Iteration).
     wifi_attack_tick();
     evil_portal_tick();   // falls Portal aktiv: DNS + HTTP bedienen
     wifi_recon_tick();    // falls Recon aktiv: Kanal-Hop / Deauth-Stoss / Statistik
+    ble_spam_tick();      // falls BLE-Spam aktiv: naechstes Advertisement senden
 
     // --- ESP-NOW-Frame (WiFi vom WROOM-Relay) zuerst verarbeiten ---
     if(enowFlag) {
