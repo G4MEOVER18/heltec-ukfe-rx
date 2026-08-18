@@ -18,6 +18,7 @@ extern "C" {
 #include "ukfe_rf.h"
 }
 #include "wifi_attack.h"   // native WiFi-Angriffe (Deauth/Beacon/Scan), nicht-blockierend
+#include "evil_portal.h"   // Captive Portal (SoftAP + DNS + Login-Harvest)
 
 // Natives USB (ESP32-S3, GPIO19/20) als HID-Tastatur -> BadUSB auf Zielrechner.
 // Nur autorisierte Tests/eigene Geraete. Zielrechner an das native USB (nicht COM26/CP210x).
@@ -184,6 +185,7 @@ void act(const UkfeRfMessage* m) {
     }
     case UkfeRfCmdWifiStop:
         wifi_attack_stop();
+        evil_portal_stop();                       // beendet auch ein laufendes Portal
         oledMsg("CMD: WIFI STOP", "Angriff beendet");
         break;
     case UkfeRfCmdBeaconSpam: {
@@ -192,10 +194,13 @@ void act(const UkfeRfMessage* m) {
         oledMsg("CMD: BEACON SPAM", "laeuft (868=stop)");
         break;
     }
-    case UkfeRfCmdEvilPortal:
-        // TODO: SoftAP + Captive-DNS + Login-Portal (uebernimmt WiFi voll, ESP-NOW pausiert)
-        oledMsg("CMD: EVIL PORTAL", "noch nicht impl.");
+    case UkfeRfCmdEvilPortal: {
+        uint8_t pid = m->arg_len ? m->args[0] : 0;
+        evil_portal_start(pid, ESPNOW_CHANNEL);   // uebernimmt WiFi; ESP-NOW pausiert, 868 steuert
+        snprintf(buf, sizeof(buf), "SSID:%s", evil_portal_ssid());
+        oledMsg("CMD: EVIL PORTAL", buf, "868=stop, Logins@Serial");
         break;
+    }
     default:
         snprintf(buf, sizeof(buf), "0x%02X alen=%u", m->cmd, m->arg_len);
         oledMsg("CMD:", buf);
@@ -273,6 +278,7 @@ void setup() {
 void loop() {
     // Laufenden WiFi-Angriff bedienen (nicht-blockierend, ein Burst pro Iteration).
     wifi_attack_tick();
+    evil_portal_tick();   // falls Portal aktiv: DNS + HTTP bedienen
 
     // --- ESP-NOW-Frame (WiFi vom WROOM-Relay) zuerst verarbeiten ---
     if(enowFlag) {
