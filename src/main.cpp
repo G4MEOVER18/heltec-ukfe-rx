@@ -21,6 +21,7 @@ extern "C" {
 #include "evil_portal.h"   // Captive Portal (SoftAP + DNS + Login-Harvest)
 #include "wifi_recon.h"    // Promiscuous-Recon (Handshake/Probe/PacketMon/Pwnagotchi/Wardrive)
 #include "ble_spam.h"      // BLE-Spam (Apple/Windows/Android) + BLE-Scan via NimBLE
+#include "ducky.h"         // DuckyScript-Interpreter (SD-Payloads vom Flipper, gestreamt)
 
 // Natives USB (ESP32-S3, GPIO19/20) als HID-Tastatur -> BadUSB auf Zielrechner.
 // Nur autorisierte Tests/eigene Geraete. Zielrechner an das native USB (nicht COM26/CP210x).
@@ -44,10 +45,8 @@ static const uint8_t BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 // Gemeinsames Geheimnis fuer den keyed MAC — IDENTISCH mit RF_SECRET in
 // lora-ukfe/rf/rf_comm.c (out-of-band pairen, Pairing-Bytes ersetzen!).
-static const uint8_t UKFE_SECRET[UKFE_RF_SECRET_LEN] = {
-    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,   // "G4MEOVER"
-    0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,   // Pairing-Bytes
-};
+#include "secret.h"
+static const uint8_t UKFE_SECRET[UKFE_RF_SECRET_LEN] = UKFE_RF_SECRET_INIT;
 
 SPIClass loraSpi(HSPI);
 SX1262 radio = new Module(PIN_LORA_NSS, PIN_LORA_DIO1, PIN_LORA_RST, PIN_LORA_BUSY, loraSpi);
@@ -145,6 +144,26 @@ static const char* hid_payload(uint8_t idx) {
     PAYLOADS[idx].run();
     return PAYLOADS[idx].name;
 }
+
+// ---- Eingebaute DuckyScripts (0x51 HidDucky, per script_id). Nur autorisierte Tests. ----
+static const char* DUCKY_SCRIPTS[] = {
+    // 0: Marker in Editor tippen (harmloser Nachweis)
+    "REM G4MEOVER Marker\nGUI r\nDELAY 400\nSTRING notepad\nENTER\nDELAY 800\n"
+    "STRING G4MEOVER HID-Ducky online\nENTER",
+    // 1: PowerShell oeffnen + Marker (kein Payload, nur Echo)
+    "REM PowerShell Marker\nGUI r\nDELAY 400\nSTRING powershell\nENTER\nDELAY 1200\n"
+    "STRING Write-Host 'G4MEOVER pentest marker'\nENTER",
+    // 2: Bildschirm sperren
+    "REM Lock\nGUI l",
+};
+#define DUCKY_SCRIPT_COUNT (sizeof(DUCKY_SCRIPTS) / sizeof(DUCKY_SCRIPTS[0]))
+
+// ---- Gestreamter DuckyScript (0x52 HidStream): Chunks ueber viele Frames sammeln. ----
+// Frame-Args: [0]=flags (Bit0=first -> Puffer leeren, Bit1=last -> tippen), [1..]=Skript-Bytes.
+// Bei >39 Nutzbytes/Frame (UKFE_RF_MAX_ARGS-1) reihen sich beliebig lange Skripte aneinander.
+static char     duckyStream[2048];
+static uint16_t duckyStreamLen = 0;
+static bool     duckyStreamOverflow = false;
 
 void act(const UkfeRfMessage* m) {
     char buf[24];
@@ -263,6 +282,36 @@ void act(const UkfeRfMessage* m) {
         ble_spam_stop();
         oledMsg("CMD: ABORT", "BLE-Spam gestoppt");
         break;
+    case UkfeRfCmdHidDucky: {
+        uint8_t sid = m->arg_len ? m->args[0] : 0;
+        if(sid >= DUCKY_SCRIPT_COUNT) { oledMsg("CMD: HID DUCKY", "id unbekannt"); break; }
+        snprintf(buf, sizeof(buf), "id=%u laeuft", sid);
+        oledMsg("CMD: HID DUCKY", buf, "-> HID tippt");
+        delay(300);                       // Host-Enumeration abwarten
+        ducky_run(Keyboard, DUCKY_SCRIPTS[sid]);
+        break;
+    }
+    case UkfeRfCmdHidStream: {
+        uint8_t flags = m->arg_len ? m->args[0] : 0;
+        if(flags & 0x01) { duckyStreamLen = 0; duckyStreamOverflow = false; }  // first: reset
+        // Nutzbytes ab args[1] anhaengen (mit Ueberlauf-Schutz, Platz fuer '\0' lassen)
+        for(uint8_t i = 1; i < m->arg_len; i++) {
+            if(duckyStreamLen < sizeof(duckyStream) - 1) duckyStream[duckyStreamLen++] = (char)m->args[i];
+            else duckyStreamOverflow = true;
+        }
+        if(flags & 0x02) {                // last: tippen
+            duckyStream[duckyStreamLen] = 0;
+            snprintf(buf, sizeof(buf), "%u B%s", duckyStreamLen, duckyStreamOverflow ? " OVF" : "");
+            oledMsg("CMD: HID STREAM", buf, "-> HID tippt");
+            delay(300);
+            ducky_run(Keyboard, duckyStream);
+            duckyStreamLen = 0; duckyStreamOverflow = false;
+        } else {
+            snprintf(buf, sizeof(buf), "%u B gepuffert", duckyStreamLen);
+            oledMsg("CMD: HID STREAM", buf, "warte last-Flag");
+        }
+        break;
+    }
     default:
         snprintf(buf, sizeof(buf), "0x%02X alen=%u", m->cmd, m->arg_len);
         oledMsg("CMD:", buf);

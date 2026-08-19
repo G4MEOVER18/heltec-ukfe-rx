@@ -48,6 +48,7 @@ typedef enum {
     UkfeRfCmdGpsWardrive = 0x41,
     UkfeRfCmdHidPayload  = 0x50,  // args: uint8 idx (Marker/Notepad/PS/CMD/Lock)
     UkfeRfCmdHidDucky    = 0x51,  // args: uint8 script_id
+    UkfeRfCmdHidStream   = 0x52,  // args: uint8 flags(b0=first,b1=last), rest=DuckyScript-Chunk
 } UkfeRfCmd;
 
 // ---- Responses (Heltec -> Flipper), Bit7 gesetzt ----

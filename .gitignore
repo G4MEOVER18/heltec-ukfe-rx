@@ -2,3 +2,6 @@
 .vscode/
 *.pyc
 __pycache__/
+
+# Lokales Pairing-Secret (nicht committen)
+secret.h
