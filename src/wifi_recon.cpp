@@ -47,6 +47,11 @@ static void promisc_cb(void* buf, wifi_promiscuous_pkt_type_t type) {
                     s_hits++;
                     Serial.printf("[HS] EAPOL #%lu ap=%02X:%02X:%02X:%02X:%02X:%02X len=%d\n",
                         (unsigned long)s_hits, fr[16], fr[17], fr[18], fr[19], fr[20], fr[21], len);
+                    // Rohen 802.11-Frame als Hex ausgeben -> Deck rekonstruiert daraus ein .pcap
+                    // (LINKTYPE_IEEE802_11=105) und knackt via wpa_crack.py. Kontrakt: "[HSRAW] <hex>".
+                    Serial.print("[HSRAW] ");
+                    for(int j = 0; j < len; j++) Serial.printf("%02X", fr[j]);
+                    Serial.println();
                     break;
                 }
             }
