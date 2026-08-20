@@ -27,6 +27,8 @@ bool lorawan_join_and_uplink(const char* status) {
     radio.begin();
     radio.setTCXO(1.8);
     radio.setDio2AsRfSwitch(true);
+    radio.setRxBoostedGainMode(true);  // hoehere RX-Empfindlichkeit -> faengt den JoinAccept
+                                       // (ohne dies: rc=-1116, RX-Fenster leer). Wie heltec-tag.
 
     static LoRaWANNode node(&radio, &EU868);
     uint8_t appkey[16];
