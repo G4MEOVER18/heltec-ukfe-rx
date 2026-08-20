@@ -34,6 +34,10 @@ bool lorawan_join_and_uplink(const char* status) {
     uint8_t appkey[16];
     hex_bytes(LORAWAN_APP_KEY, appkey, 16);
     node.beginOTAA(hex_u64(LORAWAN_JOIN_EUI), hex_u64(LORAWAN_DEV_EUI), appkey, appkey);
+    // Duty-Cycle-/Dwell-Sperre aus: sonst blockiert RadioLib nach mehreren Joins den TX
+    // (EU868 1%) -> JoinRequest geht gar nicht raus -> -1116/keine TTN-Events. On-demand ok.
+    node.setDutyCycle(false);
+    node.setDwellTime(false);
 
     Serial.printf("[LORAWAN] OTAA join devEUI=%s ...\n", LORAWAN_DEV_EUI);
     int rc = node.activateOTAA(0);
