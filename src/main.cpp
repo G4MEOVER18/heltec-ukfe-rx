@@ -22,6 +22,7 @@ extern "C" {
 #include "wifi_recon.h"    // Promiscuous-Recon (Handshake/Probe/PacketMon/Pwnagotchi/Wardrive)
 #include "ble_spam.h"      // BLE-Spam (Apple/Windows/Android) + BLE-Scan via NimBLE
 #include "ducky.h"         // DuckyScript-Interpreter (SD-Payloads vom Flipper, gestreamt)
+#include "lorawan_link.h"  // On-Demand-LoRaWAN (TTN) auf demselben SX1262
 
 // Natives USB (ESP32-S3, GPIO19/20) als HID-Tastatur -> BadUSB auf Zielrechner.
 // Nur autorisierte Tests/eigene Geraete. Zielrechner an das native USB (nicht COM26/CP210x).
@@ -258,6 +259,13 @@ void act(const UkfeRfMessage* m) {
         wifi_recon_rid(0);
         oledMsg("CMD: RID SCAN", "Drohnen-RemoteID", "868=stop, [RID]@Serial");
         break;
+    case UkfeRfCmdLoraJoin: {
+        // SX1262 kurz auf LoRaWAN: OTAA-Join + Status-Uplink, dann FSK wiederherstellen.
+        oledMsg("CMD: LORAWAN", "OTAA-Join TTN...", "868 kurz belegt");
+        bool ok = lorawan_join_and_uplink("g4meover-v3 online");
+        oledMsg("CMD: LORAWAN", ok ? "JOINED + uplink" : "join FAILED", "-> FSK zurueck");
+        break;
+    }
     case UkfeRfCmdKarma:
         // TODO: Probe sniffen + passende Fake-APs beacon-en (Probe->Response-Loop)
         oledMsg("CMD: KARMA", "noch nicht impl.");
@@ -326,6 +334,20 @@ void act(const UkfeRfMessage* m) {
 void startRx() {
     // Fester Paketrahmen (Flipper padded auf UKFE_RF_MAX_FRAME) -> deterministisch.
     radio.startReceive();
+}
+
+// Stellt den 868-FSK-ukfe_rf-Empfang wieder her (nach einem LoRaWAN-Ausflug auf demselben
+// SX1262). Genau die FSK-Konfiguration aus setup(), damit ukfe_rf danach weiterlaeuft.
+void ukfe_fsk_restore() {
+    radio.beginFSK(UKFE_RF_FREQUENCY_HZ / 1e6f, UKFE_RF_BITRATE / 1000.0f, 47.6f, 117.3f, 10, 16);
+    radio.setTCXO(1.8);
+    radio.setDio2AsRfSwitch(true);
+    uint8_t sync[2] = {(UKFE_RF_SYNC_WORD >> 8) & 0xFF, UKFE_RF_SYNC_WORD & 0xFF};
+    radio.setSyncWord(sync, 2);
+    radio.fixedPacketLengthMode(UKFE_RF_MAX_FRAME);
+    radio.setCRC(0);
+    radio.setDio1Action(onDio1);
+    startRx();
 }
 
 void setup() {
