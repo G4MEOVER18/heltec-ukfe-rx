@@ -17,6 +17,11 @@
 extern "C" {
 #include "ukfe_rf.h"
 }
+#include "wifi_attack.h"   // native WiFi-Angriffe (Deauth/Beacon/Scan), nicht-blockierend
+#include "evil_portal.h"   // Captive Portal (SoftAP + DNS + Login-Harvest)
+#include "wifi_recon.h"    // Promiscuous-Recon (Handshake/Probe/PacketMon/Pwnagotchi/Wardrive)
+#include "ble_spam.h"      // BLE-Spam (Apple/Windows/Android) + BLE-Scan via NimBLE
+#include "ducky.h"         // DuckyScript-Interpreter (SD-Payloads vom Flipper, gestreamt)
 
 // Natives USB (ESP32-S3, GPIO19/20) als HID-Tastatur -> BadUSB auf Zielrechner.
 // Nur autorisierte Tests/eigene Geraete. Zielrechner an das native USB (nicht COM26/CP210x).
@@ -40,10 +45,8 @@ static const uint8_t BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 // Gemeinsames Geheimnis fuer den keyed MAC — IDENTISCH mit RF_SECRET in
 // lora-ukfe/rf/rf_comm.c (out-of-band pairen, Pairing-Bytes ersetzen!).
-static const uint8_t UKFE_SECRET[UKFE_RF_SECRET_LEN] = {
-    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,   // "G4MEOVER"
-    0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,   // Pairing-Bytes
-};
+#include "secret.h"
+static const uint8_t UKFE_SECRET[UKFE_RF_SECRET_LEN] = UKFE_RF_SECRET_INIT;
 
 SPIClass loraSpi(HSPI);
 SX1262 radio = new Module(PIN_LORA_NSS, PIN_LORA_DIO1, PIN_LORA_RST, PIN_LORA_BUSY, loraSpi);
@@ -142,6 +145,26 @@ static const char* hid_payload(uint8_t idx) {
     return PAYLOADS[idx].name;
 }
 
+// ---- Eingebaute DuckyScripts (0x51 HidDucky, per script_id). Nur autorisierte Tests. ----
+static const char* DUCKY_SCRIPTS[] = {
+    // 0: Marker in Editor tippen (harmloser Nachweis)
+    "REM G4MEOVER Marker\nGUI r\nDELAY 400\nSTRING notepad\nENTER\nDELAY 800\n"
+    "STRING G4MEOVER HID-Ducky online\nENTER",
+    // 1: PowerShell oeffnen + Marker (kein Payload, nur Echo)
+    "REM PowerShell Marker\nGUI r\nDELAY 400\nSTRING powershell\nENTER\nDELAY 1200\n"
+    "STRING Write-Host 'G4MEOVER pentest marker'\nENTER",
+    // 2: Bildschirm sperren
+    "REM Lock\nGUI l",
+};
+#define DUCKY_SCRIPT_COUNT (sizeof(DUCKY_SCRIPTS) / sizeof(DUCKY_SCRIPTS[0]))
+
+// ---- Gestreamter DuckyScript (0x52 HidStream): Chunks ueber viele Frames sammeln. ----
+// Frame-Args: [0]=flags (Bit0=first -> Puffer leeren, Bit1=last -> tippen), [1..]=Skript-Bytes.
+// Bei >39 Nutzbytes/Frame (UKFE_RF_MAX_ARGS-1) reihen sich beliebig lange Skripte aneinander.
+static char     duckyStream[2048];
+static uint16_t duckyStreamLen = 0;
+static bool     duckyStreamOverflow = false;
+
 void act(const UkfeRfMessage* m) {
     char buf[24];
     // LED-Quittung
@@ -161,16 +184,134 @@ void act(const UkfeRfMessage* m) {
         oledMsg("CMD: PAYLOAD", buf, "-> HID getippt");
         break;
     }
-    case UkfeRfCmdWifiDeauth:
-        oledMsg("CMD: WIFI DEAUTH");
-        // TODO(HW): an ESP32-WiFi-Satellit weiterreichen
+    case UkfeRfCmdWifiScan: {
+        oledMsg("CMD: WIFI SCAN", "scanne...");
+        uint8_t n = wifi_attack_scan();           // blockierend ~2 s, danach ESP-NOW-Kanal zurueck
+        snprintf(buf, sizeof(buf), "%u APs gefunden", n);
+        oledMsg("CMD: WIFI SCAN", buf, "-> siehe Serial");
         break;
-    case UkfeRfCmdEvilPortal:
-        oledMsg("CMD: EVIL PORTAL");
+    }
+    case UkfeRfCmdWifiDeauth: {
+        // args: uint8 bssid[6], uint8 channel (0=alle/hoppen)
+        if(m->arg_len >= 6) {
+            uint8_t ch = (m->arg_len >= 7) ? m->args[6] : 0;
+            wifi_attack_deauth(m->args, ch, 0);
+            snprintf(buf, sizeof(buf), "ch=%u %02X:%02X:%02X..", ch,
+                     m->args[0], m->args[1], m->args[2]);
+            oledMsg("CMD: WIFI DEAUTH", buf, "laeuft (868=stop)");
+        } else {
+            oledMsg("CMD: WIFI DEAUTH", "arg fehlt (bssid)");
+        }
         break;
-    case UkfeRfCmdBeaconSpam:
-        oledMsg("CMD: BEACON SPAM");
+    }
+    case UkfeRfCmdWifiStop:
+        wifi_attack_stop();
+        evil_portal_stop();                       // beendet auch ein laufendes Portal
+        wifi_recon_stop();                        // beendet auch laufenden Recon-Sniffer
+        oledMsg("CMD: WIFI STOP", "Angriff beendet");
         break;
+    case UkfeRfCmdBeaconSpam: {
+        uint8_t mode = m->arg_len ? m->args[0] : 0;
+        wifi_attack_beacon(mode, 0);
+        oledMsg("CMD: BEACON SPAM", "laeuft (868=stop)");
+        break;
+    }
+    case UkfeRfCmdEvilPortal: {
+        uint8_t pid = m->arg_len ? m->args[0] : 0;
+        evil_portal_start(pid, ESPNOW_CHANNEL);   // uebernimmt WiFi; ESP-NOW pausiert, 868 steuert
+        snprintf(buf, sizeof(buf), "SSID:%s", evil_portal_ssid());
+        oledMsg("CMD: EVIL PORTAL", buf, "868=stop, Logins@Serial");
+        break;
+    }
+    case UkfeRfCmdHandshake: {
+        // args: uint8 bssid[6], uint8 channel — EAPOL sniffen + Deauth-Stoesse
+        if(m->arg_len >= 7) {
+            wifi_recon_handshake(m->args, m->args[6], 0);
+            snprintf(buf, sizeof(buf), "ch=%u %02X:%02X:%02X..", m->args[6],
+                     m->args[0], m->args[1], m->args[2]);
+            oledMsg("CMD: HANDSHAKE", buf, "868=stop, EAPOL@Serial");
+        } else {
+            oledMsg("CMD: HANDSHAKE", "arg fehlt (bssid+ch)");
+        }
+        break;
+    }
+    case UkfeRfCmdWardrive: {
+        oledMsg("CMD: WARDRIVE", "scanne...");
+        uint8_t n = wifi_recon_wardrive();        // Scan -> WiGLE-CSV ueber Serial
+        snprintf(buf, sizeof(buf), "%u APs", n);
+        oledMsg("CMD: WARDRIVE", buf, "WiGLE-CSV@Serial");
+        break;
+    }
+    case UkfeRfCmdProbeSniff:
+        wifi_recon_probe(0);
+        oledMsg("CMD: PROBE SNIFF", "laeuft (868=stop)", "SSID/MAC@Serial");
+        break;
+    case UkfeRfCmdPacketMon:
+        wifi_recon_packetmon(0);
+        oledMsg("CMD: PACKET MON", "laeuft (868=stop)", "Stats@Serial");
+        break;
+    case UkfeRfCmdPwnagotchi:
+        wifi_recon_pwnagotchi(0);
+        oledMsg("CMD: PWNAGOTCHI", "Detektor laeuft", "868=stop");
+        break;
+    case UkfeRfCmdKarma:
+        // TODO: Probe sniffen + passende Fake-APs beacon-en (Probe->Response-Loop)
+        oledMsg("CMD: KARMA", "noch nicht impl.");
+        break;
+    case UkfeRfCmdBleScan: {
+        uint8_t n = ble_scan(m->arg_len ? (uint32_t)m->args[0] * 1000 : 3000);
+        snprintf(buf, sizeof(buf), "%u BLE-Geraete", n);
+        oledMsg("CMD: BLE SCAN", buf, "-> siehe Serial");
+        break;
+    }
+    case UkfeRfCmdBleSpam: {
+        uint8_t mode = m->arg_len ? m->args[0] : 0;
+        ble_spam_start(mode);
+        oledMsg("CMD: BLE SPAM", "laeuft", "Abort(0x03)=stop");
+        break;
+    }
+    case UkfeRfCmdSourApple:
+        ble_spam_start(1);   // Apple-only Proximity-Spam
+        oledMsg("CMD: SOUR APPLE", "Apple-Spam", "Abort(0x03)=stop");
+        break;
+    case UkfeRfCmdBleSniff:
+        // TODO: passiver BLE-Sniffer/Logger (NimBLEScan-Callback dauerhaft)
+        oledMsg("CMD: BLE SNIFF", "noch nicht impl.");
+        break;
+    case UkfeRfCmdAbort:
+        ble_spam_stop();
+        oledMsg("CMD: ABORT", "BLE-Spam gestoppt");
+        break;
+    case UkfeRfCmdHidDucky: {
+        uint8_t sid = m->arg_len ? m->args[0] : 0;
+        if(sid >= DUCKY_SCRIPT_COUNT) { oledMsg("CMD: HID DUCKY", "id unbekannt"); break; }
+        snprintf(buf, sizeof(buf), "id=%u laeuft", sid);
+        oledMsg("CMD: HID DUCKY", buf, "-> HID tippt");
+        delay(300);                       // Host-Enumeration abwarten
+        ducky_run(Keyboard, DUCKY_SCRIPTS[sid]);
+        break;
+    }
+    case UkfeRfCmdHidStream: {
+        uint8_t flags = m->arg_len ? m->args[0] : 0;
+        if(flags & 0x01) { duckyStreamLen = 0; duckyStreamOverflow = false; }  // first: reset
+        // Nutzbytes ab args[1] anhaengen (mit Ueberlauf-Schutz, Platz fuer '\0' lassen)
+        for(uint8_t i = 1; i < m->arg_len; i++) {
+            if(duckyStreamLen < sizeof(duckyStream) - 1) duckyStream[duckyStreamLen++] = (char)m->args[i];
+            else duckyStreamOverflow = true;
+        }
+        if(flags & 0x02) {                // last: tippen
+            duckyStream[duckyStreamLen] = 0;
+            snprintf(buf, sizeof(buf), "%u B%s", duckyStreamLen, duckyStreamOverflow ? " OVF" : "");
+            oledMsg("CMD: HID STREAM", buf, "-> HID tippt");
+            delay(300);
+            ducky_run(Keyboard, duckyStream);
+            duckyStreamLen = 0; duckyStreamOverflow = false;
+        } else {
+            snprintf(buf, sizeof(buf), "%u B gepuffert", duckyStreamLen);
+            oledMsg("CMD: HID STREAM", buf, "warte last-Flag");
+        }
+        break;
+    }
     default:
         snprintf(buf, sizeof(buf), "0x%02X alen=%u", m->cmd, m->arg_len);
         oledMsg("CMD:", buf);
@@ -236,6 +377,10 @@ void setup() {
         esp_now_add_peer(&bpeer);
     } else Serial.println("ESP-NOW init FEHLGESCHLAGEN (868-RX laeuft weiter)");
 
+    // WiFi-Module kennen den ESP-NOW-Kanal, um ihn nach Angriffen/Recon wiederherzustellen.
+    wifi_attack_init(ESPNOW_CHANNEL);
+    wifi_recon_init(ESPNOW_CHANNEL);
+
     Serial.printf("\nG4MEOVER UKFE-RX bereit. 868.35MHz-2FSK + ESP-NOW(Kanal %d, %s).\n",
                   ESPNOW_CHANNEL, enow_ok ? "an" : "AUS");
     Serial.printf("STA-MAC %s\n", WiFi.macAddress().c_str());
@@ -243,6 +388,12 @@ void setup() {
 }
 
 void loop() {
+    // Laufende WiFi-/BLE-Aktionen bedienen (nicht-blockierend, pro Iteration).
+    wifi_attack_tick();
+    evil_portal_tick();   // falls Portal aktiv: DNS + HTTP bedienen
+    wifi_recon_tick();    // falls Recon aktiv: Kanal-Hop / Deauth-Stoss / Statistik
+    ble_spam_tick();      // falls BLE-Spam aktiv: naechstes Advertisement senden
+
     // --- ESP-NOW-Frame (WiFi vom WROOM-Relay) zuerst verarbeiten ---
     if(enowFlag) {
         int len = enowLen;
