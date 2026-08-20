@@ -40,6 +40,7 @@ typedef enum {
     UkfeRfCmdKarma       = 0x28,
     UkfeRfCmdPacketMon   = 0x29,  // Packet Monitor / PCAP
     UkfeRfCmdPwnagotchi  = 0x2A,
+    UkfeRfCmdRidScan     = 0x2B,  // Drohnen-Remote-ID (ASTM F3411 WiFi-Beacon OUI FA:0B:BC) sniffen
     UkfeRfCmdBleScan     = 0x30,
     UkfeRfCmdBleSpam     = 0x31,  // args: uint8 mode (Apple/Android/Samsung/Windows)
     UkfeRfCmdSourApple   = 0x32,
