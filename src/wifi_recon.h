@@ -13,6 +13,7 @@ void     wifi_recon_handshake(const uint8_t bssid[6], uint8_t channel, uint32_t 
 void     wifi_recon_probe(uint32_t dur_ms);        // Probe-Requests -> SSID/Client-MAC
 void     wifi_recon_packetmon(uint32_t dur_ms);    // Paketstatistik (mgmt/data/ctrl)
 void     wifi_recon_pwnagotchi(uint32_t dur_ms);   // Pwnagotchi-Beacon-Detektor
+void     wifi_recon_rid(uint32_t dur_ms);          // Drohnen-Remote-ID (ASTM F3411) sniffen
 
 uint8_t  wifi_recon_wardrive();   // einmaliger Scan -> WiGLE-CSV ueber Serial, gibt AP-Zahl zurueck
 

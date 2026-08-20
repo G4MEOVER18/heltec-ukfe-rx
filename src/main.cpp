@@ -254,6 +254,10 @@ void act(const UkfeRfMessage* m) {
         wifi_recon_pwnagotchi(0);
         oledMsg("CMD: PWNAGOTCHI", "Detektor laeuft", "868=stop");
         break;
+    case UkfeRfCmdRidScan:
+        wifi_recon_rid(0);
+        oledMsg("CMD: RID SCAN", "Drohnen-RemoteID", "868=stop, [RID]@Serial");
+        break;
     case UkfeRfCmdKarma:
         // TODO: Probe sniffen + passende Fake-APs beacon-en (Probe->Response-Loop)
         oledMsg("CMD: KARMA", "noch nicht impl.");

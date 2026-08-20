@@ -10,7 +10,7 @@
 #define RECON_DEAUTH_MS    2000u   // Handshake: Deauth-Intervall zum Erzwingen des Reauth
 #define RECON_STATS_MS     3000u   // PacketMon: Statistik-Intervall
 
-enum ReconMode { RC_NONE, RC_HANDSHAKE, RC_PROBE, RC_PACKETMON, RC_PWNA };
+enum ReconMode { RC_NONE, RC_HANDSHAKE, RC_PROBE, RC_PACKETMON, RC_PWNA, RC_RID };
 
 static volatile ReconMode s_mode = RC_NONE;
 static uint8_t  s_espnowCh = 1;
@@ -83,6 +83,30 @@ static void promisc_cb(void* buf, wifi_promiscuous_pkt_type_t type) {
             }
         }
         break;
+    case RC_RID:
+        // Drohnen-Remote-ID: Beacon (subtype 8) nach Vendor-IE (221) mit OUI FA:0B:BC
+        // (ASTM F3411-22a / ASD-STAN) bzw. NAN 50:6F:9A durchsuchen. IEs ab Offset 36.
+        if(ftype == 0 && subtype == 8) {
+            int i = 36;
+            while(i + 2 < len) {
+                uint8_t tag = fr[i], ilen = fr[i + 1];
+                if(i + 2 + ilen > len) break;
+                if(tag == 221 && ilen >= 3) {
+                    const uint8_t* o = &fr[i + 2];
+                    bool astm = (o[0]==0xFA && o[1]==0x0B && o[2]==0xBC);
+                    bool nan  = (o[0]==0x50 && o[1]==0x6F && o[2]==0x9A);
+                    if(astm || nan) {
+                        s_hits++;
+                        Serial.printf("[RID] Drohne #%lu MAC=%02X:%02X:%02X:%02X:%02X:%02X oui=%s rssi=%d\n",
+                            (unsigned long)s_hits, fr[10], fr[11], fr[12], fr[13], fr[14], fr[15],
+                            astm ? "ASTM-Beacon" : "NAN", p->rx_ctrl.rssi);
+                        break;
+                    }
+                }
+                i += 2 + ilen;
+            }
+        }
+        break;
     default: break;
     }
 }
@@ -127,6 +151,7 @@ void wifi_recon_handshake(const uint8_t bssid[6], uint8_t channel, uint32_t dur_
 void wifi_recon_probe(uint32_t dur_ms)      { start_common(RC_PROBE,     dur_ms, true, 0); }
 void wifi_recon_packetmon(uint32_t dur_ms)  { start_common(RC_PACKETMON, dur_ms, true, 0); }
 void wifi_recon_pwnagotchi(uint32_t dur_ms) { start_common(RC_PWNA,      dur_ms, true, 0); }
+void wifi_recon_rid(uint32_t dur_ms)        { start_common(RC_RID,       dur_ms, true, 0); }
 
 uint8_t wifi_recon_wardrive() {
     int n = WiFi.scanNetworks(false, true);
@@ -179,6 +204,7 @@ const char* wifi_recon_state_str() {
         case RC_PROBE:     return "PROBE";
         case RC_PACKETMON: return "PKTMON";
         case RC_PWNA:      return "PWNA";
+        case RC_RID:       return "RID";
         default:           return "idle";
     }
 }
