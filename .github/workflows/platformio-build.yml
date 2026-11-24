@@ -1,0 +1,48 @@
+name: PlatformIO Build
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: platformio.ini vorhanden?
+        id: c
+        run: |
+          if [ -f platformio.ini ]; then
+            echo "ok=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=no" >> "$GITHUB_OUTPUT"
+            echo "::notice::Kein platformio.ini im Root - Build uebersprungen."
+          fi
+      - if: steps.c.outputs.ok == 'yes'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - if: steps.c.outputs.ok == 'yes'
+        name: PlatformIO installieren
+        run: pip install --upgrade platformio
+      - if: steps.c.outputs.ok == 'yes'
+        name: PlatformIO-Cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+      - if: steps.c.outputs.ok == 'yes'
+        name: Firmware bauen
+        run: pio run
+      - if: steps.c.outputs.ok == 'yes'
+        name: Firmware-Artefakte hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ github.sha }}
+          path: |
+            .pio/build/*/firmware.bin
+            .pio/build/*/firmware.elf
+            .pio/build/*/*.hex
+          if-no-files-found: ignore
