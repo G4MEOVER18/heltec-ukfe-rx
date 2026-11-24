@@ -34,6 +34,14 @@ jobs:
           path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
       - if: steps.c.outputs.ok == 'yes'
+        name: Secret-/Config-Header aus Beispiel erzeugen
+        run: |
+          shopt -s nullglob globstar
+          for ex in **/*.example; do
+            tgt="${ex%.example}"
+            if [ ! -f "$tgt" ]; then cp "$ex" "$tgt"; echo "::notice::$tgt aus $ex erzeugt (CI-Platzhalter)"; fi
+          done
+      - if: steps.c.outputs.ok == 'yes'
         name: Firmware bauen
         run: pio run
       - if: steps.c.outputs.ok == 'yes'
