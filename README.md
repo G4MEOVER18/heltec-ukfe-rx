@@ -1,5 +1,7 @@
 # Heltec ukfe_rf Empfänger (USB Army Penetrator)
 
+[![CI](https://github.com/G4MEOVER18/heltec-ukfe-rx/actions/workflows/platformio-build.yml/badge.svg)](https://github.com/G4MEOVER18/heltec-ukfe-rx/actions/workflows/platformio-build.yml)
+
 Firmware für den **Heltec WiFi LoRa 32 V3** (ESP32-S3 + SX1262). Empfängt die `ukfe_rf`-Befehle des Flipper-RF-Console über Funk, verifiziert sie (keyed MAC + CRC16 + Rolling-Counter) und führt Aktionen aus. Die noch fehlende **Satelliten-Ebene** des G4MEOVER-Ökosystems.
 
 ## RF-Konfiguration (beide Seiten MÜSSEN übereinstimmen)
